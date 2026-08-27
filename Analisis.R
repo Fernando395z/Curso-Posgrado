@@ -4,8 +4,30 @@
 
 library(tidyverse)
 
+
+# 0.a Ubicar automáticamente la carpeta donde está este script
+#     y trabajar ahí (así el CSV se encuentra sin importar en
+#     qué compu o carpeta esté guardado el proyecto).
+#     Funciona al correr el script con "Source" en RStudio.
 # -------------------------------------------------------------
-# 0. Carga de datos
+
+if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable()) {
+  ruta_script <- rstudioapi::getSourceEditorContext()$path
+  if (nzchar(ruta_script)) setwd(dirname(ruta_script))
+}
+
+# Chequeo de seguridad: si el CSV no está en la carpeta actual,
+# avisa con un mensaje claro en vez del error críptico de siempre.
+if (!file.exists("elcuy.csv")) {
+  stop(
+    "No se encontró 'elcuy.csv' en la carpeta: ", getwd(), "\n",
+    "Asegurate de que el archivo elcuy.csv esté en la MISMA carpeta ",
+    "que este script (analisis_elcuy.R)."
+  )
+}
+
+# -------------------------------------------------------------
+# 0.b Carga de datos
 #    - separador ";" y coma decimal.
 # -------------------------------------------------------------
 datos <- read_delim(
