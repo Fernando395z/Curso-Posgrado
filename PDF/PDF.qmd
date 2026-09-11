@@ -1,0 +1,687 @@
+---
+title: "Trabajo Práctico N°1"
+author: "Fuentealba Leonardo, Zuñiga Fernando"
+format:
+  pdf:
+    toc: true
+    number-sections: true
+execute:
+  echo: true
+  message: false
+  warning: false
+  fig-width: 8
+  fig-height: 5
+---
+
+```{r setup}
+library(tidyverse)
+library(readxl)
+library(httr2)
+library(lubridate)
+```
+
+# Ejercicio 1. Emergencia de plántulas
+
+Pastoreo vs. clausura (sep-2013 a sep-2014).
+
+```{r}
+if (!file.exists("elcuy.csv")) {
+  stop("No se encontró 'elcuy.csv' en: ", getwd())
+}
+
+datos_cuy <- read_delim(
+  "elcuy.csv",
+  delim = ";",
+  locale = locale(decimal_mark = ","),
+  show_col_types = FALSE
+)
+
+names(datos_cuy)[6] <- "Anio"
+glimpse(datos_cuy)
+```
+
+## Frecuencia por especie y tratamiento
+
+```{r}
+frec_especie_pastoreo <- datos_cuy %>%
+  group_by(Pastoreo, Especie) %>%
+  summarise(frecuencia = sum(emergencia), .groups = "drop") %>%
+  arrange(desc(frecuencia))
+
+frec_especie_pastoreo
+```
+
+## Fecha y frecuencia en el tiempo
+
+```{r}
+datos_cuy <- datos_cuy %>%
+  mutate(
+    Anio_completo = 2000 + Anio,
+    fecha = make_date(year = Anio_completo, month = mes, day = 1)
+  )
+
+frec_tiempo <- datos_cuy %>%
+  group_by(Pastoreo, Especie, fecha) %>%
+  summarise(frecuencia = sum(emergencia), .groups = "drop") %>%
+  arrange(fecha, Pastoreo, desc(frecuencia))
+
+frec_tiempo
+```
+
+## Transformación logarítmica
+
+Usamos $\log(x+1)$ para evitar $\log(0)$.
+
+```{r}
+datos_cuy <- datos_cuy %>%
+  mutate(log_emergencia = log(emergencia + 1))
+```
+
+## Media, desvío y CV
+
+```{r}
+resumen_especie_fecha <- datos_cuy %>%
+  group_by(Especie, fecha) %>%
+  summarise(
+    media_log = mean(log_emergencia),
+    de_log    = sd(log_emergencia),
+    cv_log    = ifelse(media_log == 0, NA_real_, de_log / media_log * 100),
+    .groups = "drop"
+  ) %>%
+  arrange(fecha, Especie)
+
+resumen_especie_fecha
+```
+
+## Gráfico por especie y tratamiento
+
+```{r}
+datos_cuy %>%
+  group_by(Pastoreo, Especie) %>%
+  summarise(emergencia_total = sum(emergencia), .groups = "drop") %>%
+  ggplot(aes(x = reorder(Especie, emergencia_total), y = emergencia_total, fill = Pastoreo)) +
+  geom_col(position = "dodge") +
+  coord_flip() +
+  labs(
+    title = "Emergencia total de plántulas por especie y tratamiento",
+    x = "Especie", y = "Emergencia total", fill = "Tratamiento"
+  ) +
+  theme_minimal()
+```
+
+## Especies no identificadas
+
+```{r}
+datos_cuy <- datos_cuy %>%
+  mutate(
+    no_identificada = str_detect(Especie, regex("^Sp\\d+", ignore_case = TRUE)),
+    Especie = if_else(no_identificada, "No identificada", str_trim(Especie))
+  )
+```
+
+## Especies más frecuentes
+
+```{r}
+especies_top <- datos_cuy %>%
+  group_by(Especie) %>%
+  summarise(total = sum(emergencia), .groups = "drop") %>%
+  slice_max(total, n = 4) %>%
+  pull(Especie)
+
+datos_cuy %>%
+  filter(Especie %in% especies_top) %>%
+  group_by(Especie, Pastoreo, fecha) %>%
+  summarise(emergencia_media = mean(emergencia), .groups = "drop") %>%
+  ggplot(aes(x = fecha, y = emergencia_media, color = Pastoreo)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  facet_wrap(~Especie, scales = "free_y") +
+  labs(
+    title = "Emergencia media mensual de las especies más frecuentes",
+    subtitle = "Según tratamiento de pastoreo",
+    x = "Fecha de muestreo",
+    y = "Emergencia media (plántulas/cuadro)",
+    color = "Tratamiento"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+# Ejercicio 2. Encuesta
+
+```{r}
+if (!file.exists("encuesta.csv")) {
+  stop("No se encontró 'encuesta.csv' en: ", getwd())
+}
+
+datos_encuesta <- suppressMessages(
+  read_delim("encuesta.csv", delim = ";", show_col_types = FALSE)
+)
+
+datos_sel <- datos_encuesta %>% select(8:11, 47:51)
+```
+
+El archivo trae columnas repetidas (`Hora`, `Comida`, `Bebida`); `readr` les agrega un sufijo.
+
+## Tibble vs data.frame
+
+```{r}
+tibble_datos <- as_tibble(datos_sel)
+df_datos <- as.data.frame(datos_sel)
+tibble_datos
+```
+
+El tibble muestra las primeras filas y el tipo de cada columna. El data.frame imprime todo y no muestra el tipo. El contenido es el mismo.
+
+## Consumo de alcohol
+
+```{r}
+alcohol_si <- datos_sel %>% filter(consumiste_alcohol == "Sí")
+
+pct_total_alcohol <- nrow(alcohol_si) / nrow(datos_sel) * 100
+pct_total_alcohol
+
+alcohol_por_sexo <- alcohol_si %>%
+  count(Sexo, name = "frecuencia_absoluta") %>%
+  mutate(frecuencia_relativa = frecuencia_absoluta / sum(frecuencia_absoluta) * 100)
+
+alcohol_por_sexo
+```
+
+## Histograma de edad
+
+```{r}
+alcohol_si %>%
+  filter(!is.na(Sexo)) %>%
+  ggplot(aes(x = Edad, fill = Sexo)) +
+  geom_histogram(binwidth = 1, color = "white", boundary = 0) +
+  facet_wrap(~Sexo, ncol = 1) +
+  labs(
+    title = "Distribución de edad de quienes consumieron alcohol",
+    subtitle = "Comparado por sexo",
+    x = "Edad", y = "Cantidad de estudiantes"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+## Exceso de alcohol
+
+```{r}
+pct_exceso_total <- mean(datos_sel$tuviste_un_exceso_de_alcohol == "Sí", na.rm = TRUE) * 100
+pct_exceso_total
+
+datos_sel <- datos_sel %>%
+  mutate(
+    Nivel = case_when(
+      Año %in% 1:3 ~ "Básico",
+      Año %in% 4:6 ~ "Superior",
+      TRUE ~ NA_character_
+    )
+  )
+
+resumen_exceso_nivel <- datos_sel %>%
+  filter(!is.na(Sexo), !is.na(Nivel)) %>%
+  group_by(Sexo, Nivel) %>%
+  summarise(
+    total = n(),
+    afirmativos = sum(tuviste_un_exceso_de_alcohol == "Sí", na.rm = TRUE),
+    porcentaje = afirmativos / total * 100,
+    .groups = "drop"
+  )
+
+resumen_exceso_nivel
+
+resumen_exceso_nivel %>%
+  ggplot(aes(x = Nivel, y = porcentaje, fill = Sexo)) +
+  geom_col(position = "dodge") +
+  labs(
+    title = "% de exceso de alcohol declarado, por sexo y nivel educativo",
+    x = "Nivel educativo",
+    y = "% de respuestas afirmativas",
+    fill = "Sexo"
+  ) +
+  theme_minimal()
+```
+
+## Otras variables de consumo
+
+```{r}
+vars_consumo <- c(
+  "consumiste_alcohol_este_anio",
+  "consumiste_alcohol_este_mes",
+  "consumiste_alcohol_esta_semana",
+  "tuviste_un_exceso_de_alcohol"
+)
+
+resumen_consumo <- datos_sel %>%
+  filter(!is.na(Sexo)) %>%
+  select(Sexo, all_of(vars_consumo)) %>%
+  pivot_longer(
+    cols = all_of(vars_consumo),
+    names_to = "variable",
+    values_to = "respuesta"
+  ) %>%
+  filter(respuesta == "Sí") %>%
+  count(variable, Sexo, name = "frecuencia")
+
+resumen_consumo
+
+resumen_consumo %>%
+  ggplot(aes(x = variable, y = frecuencia, color = Sexo)) +
+  geom_linerange(aes(ymin = 0, ymax = frecuencia),
+                 position = position_dodge(width = 0.4), linewidth = 1) +
+  geom_point(position = position_dodge(width = 0.4), size = 3) +
+  coord_flip() +
+  labs(
+    title = "Respuestas afirmativas por variable de consumo y sexo",
+    x = NULL, y = "Cantidad de respuestas 'Sí'",
+    color = "Sexo"
+  ) +
+  theme_minimal()
+```
+
+# Ejercicio 3. COVID-19
+
+```{r}
+if (!file.exists("cases_deaths.csv")) {
+  stop("No se encontró 'cases_deaths.csv' en: ", getwd())
+}
+
+paises_cono_sur <- c(
+  "Argentina", "Chile", "Brazil", "Uruguay",
+  "Bolivia", "Paraguay", "Peru"
+)
+
+datos_covid <- read_csv_chunked(
+  "cases_deaths.csv",
+  callback = DataFrameCallback$new(function(chunk, pos) {
+    filter(chunk, country %in% paises_cono_sur)
+  }),
+  chunk_size = 50000,
+  show_col_types = FALSE
+)
+
+glimpse(datos_covid)
+
+datos_covid %>%
+  summarise(
+    na_new_cases  = sum(is.na(new_cases)),
+    na_new_deaths = sum(is.na(new_deaths))
+  )
+```
+
+## Fecha
+
+```{r}
+datos_covid <- datos_covid %>% mutate(date = as_date(date))
+class(datos_covid$date)
+range(datos_covid$date)
+```
+
+El rango disponible va desde el 4 de enero de 2020 hasta el 19 de julio de 2026.
+
+## Casos diarios en Argentina
+
+```{r}
+argentina <- datos_covid %>% filter(country == "Argentina")
+
+argentina %>%
+  ggplot(aes(x = date)) +
+  geom_line(aes(y = new_cases), color = "grey70", linewidth = 0.3) +
+  geom_line(aes(y = new_cases_7_day_avg_right), color = "steelblue", linewidth = 0.8) +
+  labs(
+    title = "Casos diarios confirmados de COVID-19 — Argentina",
+    subtitle = "Gris: dato diario | Azul: promedio móvil 7 días",
+    x = "Fecha", y = "Casos nuevos por día"
+  ) +
+  theme_minimal()
+```
+
+## Comparación por millón de habitantes
+
+```{r}
+datos_covid %>%
+  filter(country %in% c("Argentina", "Chile", "Brazil", "Uruguay")) %>%
+  ggplot(aes(x = date, y = new_cases_per_million_7_day_avg_right, color = country)) +
+  geom_line(linewidth = 0.7) +
+  labs(
+    title = "Casos diarios de COVID-19 por millón de habitantes",
+    subtitle = "Promedio móvil de 7 días",
+    x = "Fecha", y = "Casos nuevos por millón de hab.",
+    color = "País"
+  ) +
+  theme_minimal()
+```
+
+## Fallecimientos en Argentina
+
+```{r}
+argentina %>%
+  ggplot(aes(x = date)) +
+  geom_line(aes(y = new_deaths), color = "grey70", linewidth = 0.3) +
+  geom_line(aes(y = new_deaths_7_day_avg_right), color = "firebrick", linewidth = 0.8) +
+  labs(
+    title = "Fallecimientos diarios por COVID-19 — Argentina",
+    subtitle = "Gris: dato diario | Rojo: promedio móvil 7 días",
+    x = "Fecha", y = "Fallecimientos por día"
+  ) +
+  theme_minimal()
+
+argentina %>%
+  ggplot(aes(x = date, y = total_deaths)) +
+  geom_line(color = "firebrick", linewidth = 0.8) +
+  labs(
+    title = "Fallecimientos acumulados por COVID-19 — Argentina",
+    x = "Fecha", y = "Fallecimientos acumulados"
+  ) +
+  theme_minimal()
+```
+
+## Patrón trimestral y mensual
+
+```{r}
+argentina <- argentina %>%
+  mutate(
+    anio = year(date),
+    trimestre = quarter(date),
+    mes = month(date, label = TRUE, abbr = TRUE)
+  )
+
+argentina %>%
+  group_by(anio, trimestre) %>%
+  summarise(muertes_trimestre = sum(new_deaths, na.rm = TRUE), .groups = "drop") %>%
+  ggplot(aes(x = factor(trimestre), y = muertes_trimestre, fill = factor(anio))) +
+  geom_col(position = "dodge") +
+  labs(
+    title = "Fallecimientos por trimestre — Argentina",
+    x = "Trimestre", y = "Fallecimientos del trimestre", fill = "Año"
+  ) +
+  theme_minimal()
+
+argentina %>%
+  ggplot(aes(x = mes, y = new_deaths)) +
+  geom_boxplot(fill = "salmon", outlier.alpha = 0.3) +
+  labs(
+    title = "Fallecimientos diarios según mes del año — Argentina",
+    subtitle = "Todos los años combinados",
+    x = "Mes", y = "Fallecimientos por día"
+  ) +
+  theme_minimal()
+```
+
+## Comparación entre países del Cono Sur
+
+```{r}
+paises_comparar <- c("Argentina", "Chile", "Peru", "Bolivia", "Paraguay", "Brazil")
+
+total_por_pais <- datos_covid %>%
+  filter(country %in% paises_comparar) %>%
+  group_by(country) %>%
+  filter(date == max(date)) %>%
+  ungroup() %>%
+  select(country, total_deaths, total_deaths_per_100k)
+
+total_por_pais
+
+total_por_pais %>%
+  ggplot(aes(x = reorder(country, total_deaths), y = total_deaths)) +
+  geom_col(fill = "darkred") +
+  coord_flip() +
+  labs(
+    title = "Fallecidos totales por COVID-19 — Cono Sur",
+    x = "País", y = "Fallecidos totales"
+  ) +
+  theme_minimal()
+
+total_por_pais %>%
+  ggplot(aes(x = reorder(country, total_deaths_per_100k), y = total_deaths_per_100k)) +
+  geom_col(fill = "darkorange") +
+  coord_flip() +
+  labs(
+    title = "Fallecidos cada 100.000 habitantes",
+    x = "País", y = "Fallecidos cada 100.000 hab."
+  ) +
+  theme_minimal()
+
+datos_covid %>%
+  filter(country %in% paises_comparar) %>%
+  ggplot(aes(x = date, y = total_deaths_per_million, color = country)) +
+  geom_line(linewidth = 0.7) +
+  labs(
+    title = "Fallecidos acumulados por millón de habitantes",
+    x = "Fecha", y = "Fallecidos acumulados por millón",
+    color = "País"
+  ) +
+  theme_minimal()
+```
+
+# Ejercicio 4. Telefonía fija ENACOM
+
+```{r}
+archivo_totales    <- "Telefonía Fija Accesos Totales.xlsx"
+archivo_provincias <- "Telefonía Fija Accesos Provincias.xlsx"
+
+if (!file.exists(archivo_totales) || !file.exists(archivo_provincias)) {
+  stop("Faltan los Excel de telefonía fija en: ", getwd())
+}
+
+telefonia_fija <- read_excel(archivo_totales, skip = 1)
+
+telefonia_fija_limpia <- telefonia_fija %>%
+  mutate(
+    across(c(Hogares, Comercial, Total), ~ as.numeric(str_remove_all(as.character(.), "[.,]"))),
+    across(c(Gobierno, Otros), ~ round(. * 1000))
+  ) %>%
+  mutate(Total_calculado = Hogares + Comercial + Gobierno + Otros)
+
+glimpse(telefonia_fija_limpia)
+```
+
+## Resumen descriptivo
+
+```{r}
+telefonia_fija_limpia %>%
+  select(Hogares, Comercial, Gobierno, Otros, Total) %>%
+  summary()
+```
+
+## Evolución anual
+
+```{r}
+telefonia_fija_limpia %>%
+  group_by(Año) %>%
+  summarise(Total_promedio = mean(Total, na.rm = TRUE), .groups = "drop")
+```
+
+## Evolución trimestral
+
+```{r}
+telefonia_fija_limpia %>%
+  arrange(Año, Trimestre) %>%
+  select(Año, Trimestre, Total) %>%
+  mutate(
+    variacion_abs = Total - lag(Total),
+    variacion_pct = round((Total - lag(Total)) / lag(Total) * 100, 2)
+  )
+```
+
+## Proporción por tipo de cliente
+
+```{r}
+telefonia_fija_limpia %>%
+  summarise(
+    Hogares_pct   = mean(Hogares / Total) * 100,
+    Comercial_pct = mean(Comercial / Total) * 100,
+    Gobierno_pct  = mean(Gobierno / Total) * 100,
+    Otros_pct     = mean(Otros / Total) * 100
+  )
+```
+
+## Accesos por provincia
+
+```{r}
+corregir_escala <- function(x) {
+  ifelse(abs(x - round(x)) < 1e-6, x, round(x * 1000))
+}
+
+provincias_limpia <- read_excel(archivo_provincias, skip = 1) %>%
+  mutate(
+    across(c(Hogares, Total), ~ as.numeric(str_remove_all(as.character(.), "\\."))),
+    across(c(Comercial, Gobierno, Otros), corregir_escala),
+    Total_calculado = Hogares + Comercial + Gobierno + Otros,
+    diferencia = Total - Total_calculado
+  )
+
+provincias_limpia %>%
+  select(Provincias, Total, Total_calculado, diferencia) %>%
+  arrange(desc(abs(diferencia)))
+
+provincias_ultimo <- provincias_limpia %>%
+  filter(Año == 2026, Trimestre == 1) %>%
+  arrange(desc(Total))
+
+provincias_ultimo %>% select(Provincias, Total)
+
+ggplot(provincias_ultimo, aes(x = reorder(Provincias, Total), y = Total)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(
+    title = "Accesos a telefonía fija por provincia (2026-Q1)",
+    x = "Provincia", y = "Cantidad de accesos"
+  ) +
+  theme_minimal()
+```
+
+# Ejercicio 5. ARPU de telefonía móvil
+
+```{r}
+if (!file.exists("Telefonía móvil Accesos Totales.csv") ||
+    !file.exists("Telefonía móvil Ingresos.csv")) {
+  stop("Faltan los CSV de telefonía móvil en: ", getwd())
+}
+
+accesos_movil <- read_csv("Telefonía móvil Accesos Totales.csv", show_col_types = FALSE) %>%
+  rename(
+    accesos_pospago    = `Total de accesos pospago`,
+    accesos_prepago    = `Total de accesos prepago`,
+    accesos_operativos = `Total de accesos operativos`
+  ) %>%
+  mutate(
+    across(
+      c(accesos_pospago, accesos_prepago, accesos_operativos),
+      ~ as.numeric(str_remove_all(as.character(.), "\\."))
+    )
+  )
+
+ingresos_movil <- read_csv("Telefonía móvil Ingresos.csv", show_col_types = FALSE) %>%
+  mutate(
+    Ingresos = Ingresos %>%
+      str_remove("\\$") %>%
+      str_remove_all("\\s") %>%
+      str_remove_all("\\.") %>%
+      str_replace(",", ".") %>%
+      as.numeric()
+  )
+```
+
+## ARPU nominal (2020-2025)
+
+Los ingresos están en miles de pesos.
+
+```{r}
+arpu_datos <- accesos_movil %>%
+  select(Año, Trimestre, accesos_operativos) %>%
+  inner_join(ingresos_movil, by = c("Año", "Trimestre")) %>%
+  arrange(Año, Trimestre) %>%
+  mutate(A_barra = (accesos_operativos + lag(accesos_operativos)) / 2) %>%
+  filter(Año >= 2020, Año <= 2025) %>%
+  mutate(
+    Ingresos_pesos = Ingresos * 1000,
+    ARPU_nom = Ingresos_pesos / (A_barra * 3),
+    periodo = Año + (Trimestre - 1) / 4
+  )
+
+arpu_datos %>% select(Año, Trimestre, Ingresos_pesos, A_barra, ARPU_nom)
+
+ggplot(arpu_datos, aes(x = periodo, y = ARPU_nom)) +
+  geom_line(linewidth = 1, color = "darkgreen") +
+  geom_point(size = 1.5, color = "darkgreen") +
+  labs(
+    title = "Evolución del ARPU nominal (telefonía móvil)",
+    x = "Año", y = "ARPU nominal ($ por mes)"
+  ) +
+  theme_minimal()
+```
+
+## Tipo de cambio y ARPU en dólares
+
+```{r}
+url_dolar <- paste0(
+  "https://apis.datos.gob.ar/series/api/series/?",
+  "ids=168.1_T_CAMBIOR_D_0_0_26",
+  "&start_date=2019-10-01",
+  "&end_date=2025-12-31",
+  "&collapse=month",
+  "&collapse_aggregation=avg",
+  "&format=csv"
+)
+
+dolar_mensual <- request(url_dolar) |>
+  req_user_agent("Mozilla/5.0") |>
+  req_perform() |>
+  resp_body_raw() |>
+  read_csv(show_col_types = FALSE)
+
+tc_trimestral <- dolar_mensual %>%
+  rename(TC = tipo_cambio_bna_vendedor) %>%
+  mutate(
+    Año = year(indice_tiempo),
+    Trimestre = quarter(indice_tiempo)
+  ) %>%
+  group_by(Año, Trimestre) %>%
+  summarise(TC_promedio = mean(TC), .groups = "drop")
+
+arpu_datos <- arpu_datos %>%
+  inner_join(tc_trimestral, by = c("Año", "Trimestre")) %>%
+  mutate(ARPU_usd = ARPU_nom / TC_promedio)
+
+arpu_datos %>% select(Año, Trimestre, ARPU_nom, TC_promedio, ARPU_usd)
+
+ggplot(arpu_datos, aes(x = periodo, y = ARPU_usd)) +
+  geom_line(linewidth = 1, color = "purple") +
+  geom_point(size = 1.5, color = "purple") +
+  geom_hline(yintercept = 6.5, linetype = "dashed", color = "red") +
+  labs(
+    title = "ARPU en dólares vs. promedio regional",
+    subtitle = "Línea roja punteada = USD 6,5",
+    x = "Año", y = "ARPU (USD/mes)"
+  ) +
+  theme_minimal()
+```
+
+# Respuestas
+
+## Ejercicio 1
+
+**6.** Sí. En el gráfico se observa que *Gilia* sp. y Ranunculaceae sp. tienen mayor emergencia en sitios con pastoreo, mientras que *Pappostipa* sp. y *Plantago patagonica* emergen más en sitios sin pastoreo.
+
+**8.** El patrón del gráfico coincide con la descripción teórica del ejercicio.
+
+## Ejercicio 4
+
+**1.** No se responde.
+
+**2.** Entre 2014 y 2017 el promedio crece de unos 9,6 a 10,25 millones de accesos. Desde 2018 se observa un decaimiento hasta 2025. En 2026 hay una suba leve (6,58 millones), poco concluyente porque ese año tiene un solo trimestre.
+
+**3.** Los accesos a telefonía fija crecieron entre 2014 y 2017, con el valor más alto (10.379.749 accesos) en el segundo trimestre de 2016 (valor que se repite en el segundo trimestre de 2017, según ENACOM). Después empezaron a bajar de forma constante. La caída más grande del período fue entre el último trimestre de 2018 y el primero de 2019: los accesos bajaron 15,1% (1.478.517 líneas menos) de un trimestre al siguiente. Luego la baja continuó más lento hasta 2025, con una suba leve en el primer trimestre de 2026.
+
+**4.** El tipo de cliente con mayor proporción de líneas fijas es Hogares, con un 88% del total en promedio entre 2014 y 2026. Sigue Comercial (8,55%). Otros (3,04%) y Gobierno (0,40%) son una fracción chica del total.
+
+## Ejercicio 5
+
+**4.** El ARPU en dólares se mantuvo cerca del promedio regional (USD 6,5) entre 2020 y 2023, con subas y bajas. A fines de 2023, con la devaluación del peso, cayó a unos USD 4,8, el valor más bajo del período. Las empresas seguían cobrando en pesos, pero esos pesos valían menos en dólares. La caída importa porque buena parte de lo que necesita una telefónica para la red (antenas, cables, equipos) se compra en dólares: si baja el ingreso en dólares, queda menos margen para invertir. Desde 2024 el ARPU se recuperó y superó los USD 7,5, por encima del promedio regional, lo que sugiere mejor capacidad de inversión en esa etapa.
+
+**5.** El ARPU en dólares es la métrica más adecuada para este análisis: evita el efecto de la inflación, permite comparar con otros países y se relaciona mejor con la inversión en infraestructura, que en buena parte se paga en dólares.
+
+El ARPU nominal no sirve tanto para este objetivo. Muestra los ingresos en pesos del día a día, pero no deja ver con claridad si el negocio mejoró o empeoró, porque los precios en pesos suben por inflación aunque al negocio no le vaya mejor.
